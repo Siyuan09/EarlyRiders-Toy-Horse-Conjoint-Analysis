@@ -1,0 +1,382 @@
+---
+title: Conjoint Analysis for Toy Horse
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Load packages and load data.
+```{r}
+rm(list = ls())
+require("cluster")
+require("fpc")
+require("factoextra")
+require("gridExtra")
+library(cluster)
+library(fpc)
+library(factoextra)
+library(gridExtra)
+setwd('~/Desktop/Simon/Courses/SpringA_GBA424 Analytics Design & Applications/Assignment/Toy Horse Conjoint Case')
+load('GBA424 - Toy Horse Case Data.Rdata')
+toyna <- conjointData[is.na(conjointData$ratings),]
+toy <- conjointData
+toy$price <- as.factor(toy$price)
+toy$size <- as.factor(toy$size)
+toy$motion <- as.factor(toy$motion)
+toy$style <- as.factor(toy$style)
+```
+
+Question A: Use Regression to estimate the conjoint model at the individual level
+Preparing dataset for regression. First we create the coefficient data table filled by the results of running regression of each ID's responces. And predict those missing values for ratings and fill them in the orginal table.
+```{r}
+##################
+#   QUESTION A   #
+##################
+coeff <- data.frame() # Create data frame for coefficient
+coeff[c(1:200),1] <- c(1:200) # Fill in ID's
+
+# Run the regression of each ID's responces
+for (i in c(1:200)){
+    reg = lm(ratings ~price + size + motion + style, data = toy[toy$ID == i,]) # Run regression
+    coeff[i,c(2:6)] <- reg$coefficients[1:5] # Fill in the coefficients in the coefficient data frame
+}
+
+# Rename the dataframe
+names(coeff)[1] <- 'ID'
+names(coeff)[2:6] <- names(reg$coefficients[1:5])
+
+
+# Predict missing values in the orginial dataset and fill in the predicted ratings for profiles
+for (i in c(1:nrow(toy))){
+    if (is.na(toy$ratings[i])){
+        id <- toy$ID[i]
+        pred <- predict(lm(ratings ~ price + size + motion + style, data = toy[toy$ID == id,]), toy[i,], se.fit = TRUE)
+        toy[i,'ratings'] <- pred$fit
+    }
+}
+
+# Draw histogram of individual part utilitis
+hist(coeff$price1, 
+     xlab="Utilities", ylab="Customers", 
+     main="Histogram of Utilities of Price $119.99")
+abline(v=0,col=2) 
+
+hist(coeff$size1, 
+     xlab="Utilities", ylab="Customers", 
+     main="Histogram of Utilities of Size 26 inches")
+abline(v=0,col=2) 
+
+hist(coeff$motion1, 
+     xlab="Utilities", ylab="Customers", 
+     main="Histogram of Utilities of Motion Rocking")
+abline(v=0,col=2) 
+
+hist(coeff$style, 
+     xlab="Utilities", ylab="Customers", 
+     main="Histogram of Utilities of Style Glamour")
+abline(v=0,col=2) 
+```
+
+Question B: Conduct Benefit Segmentation via Cluster Analysis of Conjoint Part-Utilities.
+Cluster classification analysis: including test the best number of clusters, plot the clusters distribution map and plot each segment's preference for each attributes.
+This part shows how to test the number of clusters.
+```{r}
+##################
+#   QUESTION B   #
+##################
+
+#Test the best number of clusters
+##Evaluate number of clusters to use on data with visualizations
+##Arguments: 
+##  toClust, the data to do kmeans cluster analysis
+##  maxClusts=15, the max number of clusters to consider
+##  seed, the random number to initialize the clusters
+##  iter.max, the max iterations for clustering algorithms to use
+##  nstart, the number of starting points to consider
+##Results:
+##  a list of weighted sum of squares and the pamk output including optimal number of clusters (nc)
+##  to create visualizations need to print tmp
+clustTest = function(toClust,print=TRUE,scale=TRUE,maxClusts=15,seed=12345,nstart=20,iter.max=100){
+  if(scale){ toClust = scale(toClust);}
+  set.seed(seed);   # set random number seed before doing cluster analysis
+  wss <- (nrow(toClust)-1)*sum(apply(toClust,2,var))
+  for (i in 2:maxClusts) wss[i] <- sum(kmeans(toClust,centers=i,nstart=nstart,iter.max=iter.max)$withinss)
+  ##gpw essentially does the following plot using wss above. 
+  #plot(1:maxClusts, wss, type="b", xlab="Number of Clusters",ylab="Within groups sum of squares")
+  gpw = fviz_nbclust(toClust,kmeans,method="wss",iter.max=iter.max,nstart=nstart,k.max=maxClusts) #alternative way to get wss elbow chart.
+  pm1 = pamk(toClust,scaling=TRUE)
+  ## pm1$nc indicates the optimal number of clusters based on 
+  ## lowest average silhoutte score (a measure of quality of clustering)
+  #alternative way that presents it visually as well.
+  gps = fviz_nbclust(toClust,kmeans,method="silhouette",iter.max=iter.max,nstart=nstart,k.max=maxClusts) 
+  if(print){
+    grid.arrange(gpw,gps, nrow = 1)
+  }
+  list(wss=wss,pm1=pm1$nc,gpw=gpw,gps=gps)
+}
+clustTest(coeff[,2:6])
+```
+
+
+This part show the distribution of clusters and prove the previous results of number of clusters.
+```{r}
+##################
+#   QUESTION B   #
+##################
+
+##Runs a set of clusters as kmeans
+##Arguments:
+##  toClust, data.frame with data to cluster
+##  nClusts, vector of number of clusters, each run as separate kmeans 
+##  ... some additional arguments to be passed to clusters
+##Return:
+##  list of 
+##    kms, kmeans cluster output with length of nClusts
+##    ps, list of plots of the clusters against first 2 principle components
+runClusts = function(toClust,nClusts,print=TRUE,maxClusts=15,seed=12345,nstart=20,iter.max=100){
+  if(length(nClusts)>4){
+    warning("Using only first 4 elements of nClusts.")
+  }
+  kms=list(); ps=list();
+  for(i in 1:length(nClusts)){
+    kms[[i]] = kmeans(toClust,nClusts[i],iter.max = iter.max, nstart=nstart)
+    ps[[i]] = fviz_cluster(kms[[i]], geom = "point", data = toClust) + ggtitle(paste("k =",nClusts[i]))
+   
+  }
+  library(gridExtra)
+  if(print){
+    tmp = marrangeGrob(ps, nrow = 2,ncol=2)
+    print(tmp)
+  }
+  list(kms=kms,ps=ps)
+}
+
+runClusts(coeff[,2:6],c(2,3,4,5))
+
+```
+
+This part plots the percentage of each segments of the population.
+```{r}
+##################
+#   QUESTION B   #
+##################
+
+##Plots a kmeans cluster as three plot report
+##  pie chart with membership percentages
+##  ellipse plot that indicates cluster definitions against principle components
+##  barplot of the cluster means
+plotClust = function(km,toClust,discPlot=FALSE){
+  nc = length(km$size)
+  if(discPlot){par(mfrow=c(2,2))}
+  else {par(mfrow=c(3,1))}
+  percsize = paste(1:nc," = ",format(km$size/sum(km$size)*100,digits=2),"%",sep="")
+  pie(km$size,labels=percsize,col = c('#F3B13E','#9B6753','#BC9973'))
+  
+  clusplot(toClust, km$cluster, color=TRUE, shade=TRUE,
+           labels=2, lines=0,col.clus=c('#F3B13E','#9B6753','#BC9973')); #plot clusters against principal components
+  
+  if(discPlot){
+    plotcluster(toClust, km$cluster,col=km$cluster); #plot against discriminant functions ()
+  }
+  rng = range(km$centers)
+  dist = rng[2]-rng[1]
+  locs = km$centers+.05*dist*ifelse(km$centers>0,1,-1)
+  bm = barplot(km$centers,beside=TRUE,col=c('#F3B13E','#9B6753','#BC9973'),main="Cluster Means",ylim=rng+dist*c(-.1,.1))
+  text(bm,locs,formatC(km$centers,format="f",digits=1))
+}
+km <- kmeans(coeff[,2:6],centers=3,nstart=20,iter.max=100)
+plotClust(km,coeff[,2:6])
+```
+
+Question C: Conduct a priori segmentation
+In this part, we conduct a priori segmentation using the variables gender and age, and find each ID's favorite profile based on the demographic segmentation. 
+```{r}
+##################
+#   QUESTION C   #
+##################
+
+toy2 <- merge(toy, respondentData, by = 'ID') # Create new dataset for priori segmentation
+
+
+# Use a dichotomy method which run the regression based on age and gender separately
+# Run regression based on age
+t1 <- subset(toy2, age == 0)
+t2 <- subset(toy2, age == 1)
+reg1 <- lm(ratings ~ factor(price)+factor(size)+factor(motion)+factor(style), data = t1)
+reg2 <- lm(ratings ~ factor(price)+factor(size)+factor(motion)+factor(style), data = t2)
+
+# Run regression based on gender
+t3 <- subset(toy2, gender == 0)
+t4 <- subset(toy2, gender == 1)
+reg3 <- lm(ratings ~ factor(price)+factor(size)+factor(motion)+factor(style), data = t3)
+reg4 <- lm(ratings ~ factor(price)+factor(size)+factor(motion)+factor(style), data = t4)
+
+# Run the regression based on whole dataset to see the overall preference
+total_reg <- lm(ratings ~ factor(price)+factor(size)+factor(motion)+factor(style), data = toy2)
+
+# Combine with the original attributes to find their influence on each attributes
+profilesData$t1 <- coefficients(reg1)[1] + coefficients(reg1)[2]*profilesData$price + coefficients(reg1)[3]*profilesData$size + coefficients(reg1)[4]*profilesData$motion + coefficients(reg1)[5]*profilesData$style
+
+profilesData$t2 <- coefficients(reg2)[1] + coefficients(reg2)[2]*profilesData$price + coefficients(reg2)[3]*profilesData$size + coefficients(reg2)[4]*profilesData$motion + coefficients(reg2)[5]*profilesData$style
+
+profilesData$t3 <- coefficients(reg3)[1] + coefficients(reg3)[2]*profilesData$price + coefficients(reg3)[3]*profilesData$size + coefficients(reg3)[4]*profilesData$motion + coefficients(reg3)[5]*profilesData$style
+
+profilesData$t4 <- coefficients(reg4)[1] + coefficients(reg4)[2]*profilesData$price + coefficients(reg4)[3]*profilesData$size + coefficients(reg4)[4]*profilesData$motion + coefficients(reg4)[5]*profilesData$style
+
+profilesData$total <- coefficients(total_reg)[1] + coefficients(total_reg)[2]*profilesData$price + coefficients(total_reg)[3]*profilesData$size + coefficients(total_reg)[4]*profilesData$motion + coefficients(total_reg)[5]*profilesData$style
+
+# Find the best result for each segmentation
+t1$best <- which.max(profilesData$t1)
+t2$best <-which.max(profilesData$t2)
+t3$best <-which.max(profilesData$t3)
+t4$best <-which.max(profilesData$t4)
+toy2$best <-which.max(profilesData$total)
+
+# Find each ID's favorite profile
+df1 <- data.frame(ID = unique(t1$ID), Best = unique(t1$best))
+df2 <- data.frame(ID = unique(t2$ID), Best = unique(t2$best))
+df3 <- data.frame(ID = unique(t3$ID), Best = unique(t3$best))
+df4 <- data.frame(ID = unique(t4$ID), Best = unique(t4$best))
+
+# Combine the results
+df <- rbind(df1, df2, df3, df4)
+```
+
+Question D: Simulate market shares for different product-line scenarios
+In this part, we set new functions for marketing simulation and calculate the profit for each scenario.
+```{r}
+##################
+#   QUESTION D   #
+##################
+
+# Set a rating matrix for each responce from each ID for different profiles
+ranking_matrix <- matrix (0, 200, 16)
+for (i in 1:200) {
+    for (j in 1:16){
+        ranking_matrix[i,j] <- toy[toy$ID == i, "ratings"][j]
+    }
+}
+
+# Function to calculate the marketing simulation
+market_simulation <- function(our_profile,competitor_profile) {
+market_matrix <- ranking_matrix[,c(our_profile,competitor_profile)]
+ for (i in 1:200){
+       max_num <- market_matrix[i,] == max(market_matrix[i,]) # To find the profile numbers that have the highest rating
+       market_matrix[i,max_num] <- 1 # Set 1 for highest rating
+       market_matrix[i,!max_num] <- 0 # Set rest as 0
+       market_matrix[i,] <- market_matrix[i,]/sum(market_matrix[i,]) # Calculate each probability based on the number of first rank ratings
+   }
+
+pre_share <- colSums(market_matrix[,1:ncol(market_matrix)])/200 # Calculate the market/preference share
+
+names(pre_share) <- append(names(pre_share),paste('profile',c(our_profile,competitor_profile), sep = ' ')) # Change the name for better visualization
+return(pre_share)
+}
+
+```
+
+In this part, we calculate the price and margin for further analysis on profit.
+```{r}
+##################
+#   QUESTION D   #
+##################
+
+# Build a new dataframe for price
+price <- data.frame(profile = c(1:16),
+                    wholesale_price = 0,
+                    vc = 0)
+
+# Calculate the vc
+for (i in c(1:16)){
+    size <- profilesData[i,3]
+    motion <- profilesData[i,4]
+    if ( size == 0 & motion == 0){
+        price[i,3] <- 21
+    }else if( size == 0 & motion == 1){
+        price[i,3]<- 33
+    }else if ( size == 1 & motion == 0){
+        price[i,3]<- 29
+        }else{
+            price[i,3]<- 41
+        }
+}
+
+# Assign the wholesale price
+for (i in c(1:16)){
+    p <- profilesData[i,6]
+    if (p == 139.99){
+        price[i,2] <- 111.99
+    }else{
+        price[i,2]<- 95.99
+    
+    }
+}
+
+# Calculate the profit margin
+price$margin <- price$wholesale_price-price$vc
+price$retail_price <- profilesData$priceLabel
+price$margin_retailer <- price$retail_price - price$vc
+```
+
+In this part, function was given to show the profit based on one year strategy.
+```{r}
+##################
+#   QUESTION D   #
+##################
+
+# Profit calculation function for 1 year for different combination
+
+profit_1yr <- function(our_profile,competitor_profile){
+  revenue = 0
+  for (i in 1:length(our_profile)){
+    revenue = revenue + price$margin[our_profile[i]]*market_simulation(our_profile,competitor_profile)[i]*4000 # Calculate the revenue
+  }
+  cost = 20000*length(our_profile) + 20000/3*sum(our_profile != 13 & our_profile != 5) # Calculate the cost
+  profit = revenue - cost # Calculate the profit
+  competitor_revenue = price$margin_retailer[competitor_profile]*market_simulation(our_profile,competitor_profile)[length(c(our_profile, competitor_profile))]*4000 # Calculate competitor revenue
+  re_co_pr <- cbind(revenue,cost,profit,competitor_revenue) # Gather them together
+  colnames(re_co_pr) <- c('Revenue', 'Cost', 'Profit', 'Competitor Revenue') # Rename the columns
+  
+  # Rename the row for better visualization
+  name <- paste('Our Profile ', our_profile, ',')
+  name <- append(name,paste('Competitor Profile', competitor_profile, sep = ' '))
+  rownames(re_co_pr) <- c()
+  for (i in 1:length(name)){
+    rownames(re_co_pr) <- paste(rownames(re_co_pr), name[i])
+  }
+
+  return(re_co_pr)
+
+}
+
+```
+
+In this part, function was given to show the results of different combination
+```{r}
+##################
+#   QUESTION D   #
+##################
+
+# Show the results of different permutation and combination
+scenario <- function(our_profile, our_num,competitor_profile,competitor_num){
+  profit_df <- data.frame()
+  our_combn_matrix <- t(combn(our_profile, our_num)) # Different combination of different profiles launched by our company
+  competitor_combn_matrix <- t(combn(competitor_profile, competitor_num)) # Different combination of different profiles launched by competitor
+  for (i in 1:nrow(our_combn_matrix)){
+    for (j in 1:nrow(competitor_combn_matrix)){
+      profit <- profit_1yr(our_combn_matrix[i,],competitor_combn_matrix[j,]) # Show the results of different combination
+      profit_df <- rbind(profit_df, profit) # Fill in the dataframe
+    }
+  }
+  return(profit_df) 
+}
+
+# Show the dataframe with different scenarios
+profit_matrix <- rbind(scenario(c(4,5,12,13,14,16),1,c(7,8),1),scenario(c(4,5,12,13,14,16),2,c(7,8),1),scenario(c(4,5,12,13,14,16),3,c(7,8),1))
+
+```
